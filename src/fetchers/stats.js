@@ -168,15 +168,32 @@ const statsFetcher = async ({
  * @see https://developer.github.com/v3/search/#search-commits
  */
 const fetchTotalCommits = (variables, token) => {
+  // Count by author-email when given (catches private repos and commits made
+  // before the email was linked to the account); fall back to author:login.
+  const q = variables.email
+    ? `author-email:${variables.email}`
+    : `author:${variables.login}`;
   return axios({
     method: "get",
-    url: `https://api.github.com/search/commits?q=author:${variables.login}`,
+    url: `https://api.github.com/search/commits?q=${encodeURIComponent(q)}`,
     headers: {
       "Content-Type": "application/json",
       Accept: "application/vnd.github.cloak-preview",
       Authorization: `token ${token}`,
     },
   });
+};
+
+// Some users authored commits under several email addresses (and GitHub's
+// commit-search index does not retroactively re-map them to the account after
+// a late email verification). For those users we count by email and sum.
+const COMMIT_EMAILS = {
+  GYOM15: [
+    "calebkoffi21@gmail.com",
+    "millimounou.guy_olivier_yanouba@courrier.uqam.ca",
+    "millimouno.guy_olivier_yanouba@courrier.uqam.ca",
+    "116668599+GYOM15@users.noreply.github.com",
+  ],
 };
 
 /**
@@ -192,6 +209,24 @@ const totalCommitsFetcher = async (username) => {
   if (!githubUsernameRegex.test(username)) {
     logger.log("Invalid username provided.");
     throw new Error("Invalid username provided.");
+  }
+
+  // For users with multiple commit emails, sum the per-email commit counts.
+  const emails = COMMIT_EMAILS[username];
+  if (emails && emails.length) {
+    let total = 0;
+    for (const email of emails) {
+      try {
+        const res = await retryer(fetchTotalCommits, { login: username, email });
+        const count = res.data.total_count;
+        if (!isNaN(count)) {
+          total += count;
+        }
+      } catch (err) {
+        logger.log(err);
+      }
+    }
+    return total;
   }
 
   let res;
