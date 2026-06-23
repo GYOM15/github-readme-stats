@@ -212,21 +212,23 @@ const totalCommitsFetcher = async (username) => {
   }
 
   // For users with multiple commit emails, sum the per-email commit counts.
+  // Run the per-email searches in parallel to keep the response fast enough
+  // for GitHub's image proxy (avoids camo timeouts on a cold cache).
   const emails = COMMIT_EMAILS[username];
   if (emails && emails.length) {
-    let total = 0;
-    for (const email of emails) {
-      try {
-        const res = await retryer(fetchTotalCommits, { login: username, email });
-        const count = res.data.total_count;
-        if (!isNaN(count)) {
-          total += count;
+    const counts = await Promise.all(
+      emails.map(async (email) => {
+        try {
+          const res = await retryer(fetchTotalCommits, { login: username, email });
+          const count = res.data.total_count;
+          return isNaN(count) ? 0 : count;
+        } catch (err) {
+          logger.log(err);
+          return 0;
         }
-      } catch (err) {
-        logger.log(err);
-      }
-    }
-    return total;
+      }),
+    );
+    return counts.reduce((sum, n) => sum + n, 0);
   }
 
   let res;
